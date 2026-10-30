@@ -1,85 +1,91 @@
-import sqlite3
-import os
+
+from __future__ import annotations
 import re
+from db_init import get_connection, TABLES
 
-
-RESERVED_WORDS = {
-    'select', 'from', 'where', 'insert', 'update', 'delete', 'table',
-    'index', 'order', 'group', 'by', 'having', 'join', 'inner', 'outer',
-    'left', 'right', 'on', 'as', 'and', 'or', 'not', 'null', 'primary',
-    'key', 'foreign', 'references', 'unique', 'check', 'default', 'create',
-    'drop', 'alter', 'column', 'values', 'into', 'set', 'distinct'
+SQL_RESERVED = {
+    'add', 'all', 'alter', 'and', 'as', 'asc', 'between', 'by', 'case', 'check',
+    'column', 'constraint', 'create', 'cross', 'database', 'default', 'delete',
+    'desc', 'distinct', 'drop', 'else', 'end', 'except', 'exists', 'false',
+    'foreign', 'from', 'full', 'group', 'having', 'in', 'index', 'inner',
+    'insert', 'into', 'is', 'join', 'key', 'left', 'limit', 'like', 'not', 'null',
+    'on', 'or', 'order', 'outer', 'primary', 'references', 'right', 'select',
+    'set', 'table', 'then', 'true', 'union', 'unique', 'update', 'using', 'values',
+    'view', 'when', 'where', 'with',
 }
+ID_NAMES = {'role_id', 'user_id', 'product_id', 'size_id',
+            'stock_item_id', 'order_id', 'order_item_id'}
 
 
-def get_connection():
-    db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db")
-    db_path = os.path.join(db_dir, "shoe_store.sqlite")
-    conn = sqlite3.connect(db_path)
-    return conn
-
-
-def get_tables(conn):
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-    return [row[0] for row in cursor.fetchall()]
-
-
-def get_columns(conn, table_name):
-    cursor = conn.cursor()
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    return [row[1] for row in cursor.fetchall()]
-
-
-def check_name(name):
+def check_name(name: str):
+    """Список нарушений: буква в начале, строчная латиница/snake_case, SQL-слова."""
     errors = []
-    if not name[0].isalpha():
-        errors.append("не начинается с буквы")
-    if not re.match(r'^[a-z0-9_]+$', name):
-        errors.append("содержит недопустимые символы")
-    if name != name.lower():
-        errors.append("не в нижнем регистре")
-    if name in RESERVED_WORDS:
-        errors.append("зарезервированное слово SQL")
+    if not name or not ('a' <= name[0] <= 'z'):
+        errors.append('имя должно начинаться с латинской буквы')
+    if not re.fullmatch(r'[a-z][a-z0-9]*(?:_[a-z0-9]+)*', name or ''):
+        errors.append('используйте строчную латиницу, цифры и snake_case')
+    if name.lower() in SQL_RESERVED:
+        errors.append('зарезервированное слово SQL')
     return errors
 
 
-def check_database():
-    conn = get_connection()
-    tables = get_tables(conn)
-
-    print("=" * 70)
-    print("ПРОВЕРКА СХЕМЫ ИМЕНОВАНИЯ")
-    print("=" * 70)
-    print()
-
-    total_errors = 0
-
-    for table in tables:
-        errors = check_name(table)
-        if errors:
-            print(f"Таблица {table}: ОШИБКИ - {', '.join(errors)}")
-            total_errors += len(errors)
-        else:
-            print(f"Таблица {table}: OK")
-
-        columns = get_columns(conn, table)
-        for column in columns:
-            col_errors = check_name(column)
-            if col_errors:
-                print(f"  Поле {column}: ОШИБКИ - {', '.join(col_errors)}")
-                total_errors += len(col_errors)
-
-    print()
-    print("=" * 70)
-    if total_errors == 0:
-        print("РЕЗУЛЬТАТ: Все имена соответствуют правилам")
-    else:
-        print(f"РЕЗУЛЬТАТ: Найдено ошибок - {total_errors}")
-    print("=" * 70)
-
-    conn.close()
+def get_tables(conn=None):
+    own = conn is None
+    db = conn if conn is not None else get_connection()
+    try:
+        return [row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )]
+    finally:
+        if own:
+            db.close()
 
 
-if __name__ == "__main__":
-    check_database()
+def get_columns(table_name, conn=None):
+    own = conn is None
+    db = conn if conn is not None else get_connection()
+    try:
+        # Экранировать идентификатор из sqlite_master, не подставлять в SQL без кавычек.
+        table = table_name.replace('"', '""')
+        return [r[1] for r in db.execute(f'PRAGMA table_info("{table}")')]
+    finally:
+        if own:
+            db.close()
+
+
+def check_database(conn=None):
+    own = conn is None
+    db = conn if conn is not None else get_connection()
+    try:
+        rows = []
+        for table in get_tables(db):
+            errs = check_name(table)
+            if table not in TABLES and table not in ('audit_log', 'login_audit'):
+                errs.append('не входит в перечень 7 основных таблиц и журналов аудита')
+            if table not in ('audit_log','login_audit') and not table.endswith('s'):
+                errs.append('имя таблицы должно быть во множественном числе')
+            rows.append(('таблица', table, errs))
+            for field in get_columns(table, db):
+                errs = check_name(field)
+                if field.endswith('_id') and field not in ID_NAMES | {'log_id', 'record_id'}:
+                    errs.append('проверьте название идентификатора')
+                if field in ('names', 'prices', 'quantities'):
+                    errs.append('имя поля должно быть в единственном числе')
+                rows.append(('поле', field, errs))
+        missing = set(TABLES) - set(get_tables(db))
+        for name in sorted(missing):
+            rows.append(('таблица', name, ['отсутствует в базе']))
+        return rows
+    finally:
+        if own:
+            db.close()
+
+
+if __name__ == '__main__':
+    report = check_database()
+    for kind, name, errors in report:
+        print(f'{kind:7} {name:27} ' + ('OK' if not errors else '; '.join(errors)))
+    count = sum(bool(errors) for _, _, errors in report)
+    print(f'ИТОГО: {len(report)} имён, ошибок: {count}')
+    raise SystemExit(1 if count else 0)

@@ -1,133 +1,87 @@
+
+import argparse
 import sqlite3
-import os
+from pathlib import Path
 
-# Шаг 17: Константа пути к базе
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db", "shoe_store.sqlite")
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = PROJECT_DIR / 'db' / 'shoe_store.sqlite'
+DATABASE_PATH = DB_PATH
+SCHEMA_PATH = PROJECT_DIR / 'db' / 'schema.sql'
+VIEWS_INDEXES_PATH = PROJECT_DIR / 'db' / 'views_indexes.sql'
+TABLES = ['roles', 'sizes', 'users', 'products', 'stock_items', 'orders', 'order_items']
 
 
-def get_connection():
-    # Создаем папку db, если её нет
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
-    conn = sqlite3.connect(DB_PATH)
-    # Шаг 18: Строки возвращаются как словари
+def get_connection(db_path=None):
+    """Подключение с обязательной ссылочной целостностью и sqlite3.Row."""
+    path = Path(db_path) if db_path is not None else DB_PATH
+    if str(path) != ':memory:':
+        path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
-    # Шаг 21: Включаем проверку внешних ключей
-    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute('PRAGMA foreign_keys = ON')
+    if conn.execute('PRAGMA foreign_keys').fetchone()[0] != 1:
+        conn.close()
+        raise RuntimeError('PRAGMA foreign_keys не активирован')
     return conn
 
 
-def drop_all_tables(cursor):
-    # Шаг 19: Удаление таблиц в обратном порядке (от зависимых к главным)
-    cursor.execute("DROP TABLE IF EXISTS order_items")
-    cursor.execute("DROP TABLE IF EXISTS orders")
-    cursor.execute("DROP TABLE IF EXISTS stock_items")
-    cursor.execute("DROP TABLE IF EXISTS users")
-    cursor.execute("DROP TABLE IF EXISTS products")
-    cursor.execute("DROP TABLE IF EXISTS sizes")
-    cursor.execute("DROP TABLE IF EXISTS roles")
+def drop_all_tables(db_path=None):
+    """Удаление схемы в обратном порядке связей. ВНИМАНИЕ: теряются все данные!"""
+    with get_connection(db_path) as conn:
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall():
+            conn.execute('DROP TRIGGER IF EXISTS "' + row[0].replace('"','""') + '"')
+        conn.execute('DROP TABLE IF EXISTS audit_log')
+        conn.execute('DROP VIEW IF EXISTS v_user_stats')
+        conn.execute('DROP VIEW IF EXISTS v_orders_full')
+        conn.execute('DROP VIEW IF EXISTS v_products_with_stock')
+        for table in reversed(TABLES):
+            conn.execute(f'DROP TABLE IF EXISTS {table}')
 
 
-def create_tables(cursor):
-    # 1. roles
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS roles (
-            role_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role_name TEXT NOT NULL UNIQUE
-        )
-    """)
-
-    # 2. sizes
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sizes (
-            size_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            size_value REAL NOT NULL UNIQUE CHECK (size_value > 20 AND size_value < 50)
-        )
-    """)
-
-    # 3. products
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            product_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_name TEXT NOT NULL CHECK (length(product_name) > 0),
-            category TEXT NOT NULL,
-            manufacturer TEXT NOT NULL,
-            price NUMERIC NOT NULL CHECK (price > 0 AND price < 1000000),
-            image_path TEXT
-        )
-    """)
-
-    # 4. users
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            last_name TEXT NOT NULL,
-            first_name TEXT NOT NULL,
-            middle_name TEXT,
-            login TEXT NOT NULL UNIQUE CHECK (length(login) >= 3 AND length(login) <= 20),
-            role_id INTEGER NOT NULL,
-            FOREIGN KEY (role_id) REFERENCES roles(role_id) ON DELETE RESTRICT
-        )
-    """)
-
-    # 5. stock_items
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stock_items (
-            stock_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER NOT NULL,
-            size_id INTEGER NOT NULL,
-            quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-            FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
-            FOREIGN KEY (size_id) REFERENCES sizes(size_id) ON DELETE RESTRICT
-        )
-    """)
-
-    # 6. orders
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            order_date TEXT NOT NULL DEFAULT CURRENT_DATE CHECK (date(order_date) IS NOT NULL),
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT
-        )
-    """)
-
-    # 7. order_items
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS order_items (
-            order_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER NOT NULL,
-            stock_item_id INTEGER NOT NULL,
-            quantity INTEGER NOT NULL CHECK (quantity > 0),
-            price NUMERIC NOT NULL CHECK (price > 0),
-            FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
-            FOREIGN KEY (stock_item_id) REFERENCES stock_items(stock_item_id) ON DELETE RESTRICT
-        )
-    """)
-
-    # Шаги 65-71: Создание индексов
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_role_id ON users(role_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_manufacturer ON products(manufacturer)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_items_product_id ON stock_items(product_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_items_size_id ON stock_items(size_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_items_stock_item_id ON order_items(stock_item_id)")
+def create_tables(db_path=None, connection=None):
+    """Создание структур из schema.sql и фиксация изменений."""
+    owned = connection is None
+    conn = connection or get_connection(db_path)
+    try:
+        conn.executescript(SCHEMA_PATH.read_text(encoding='utf-8'))
+        # Повторный запуск обновляет все VIEW, но не трогает строки таблиц.
+        conn.executescript(VIEWS_INDEXES_PATH.read_text(encoding='utf-8'))
+        conn.commit()
+        return conn
+    finally:
+        if owned:
+            conn.close()
 
 
-def main():
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    drop_all_tables(cursor)
-    create_tables(cursor)
-    
-    conn.commit()
-    conn.close()
-    print("База данных успешно пересоздана со всеми таблицами и индексами")
+def init_db(db_path=None, connection=None):
+    """Создаёт недостающие структуры без удаления данных.
+
+    Для скриптов дней 1–3 поддержан вызов init_db(conn), а для дня 4 —
+    init_db(path). Это одна и та же схема db/schema.sql.
+    """
+    if isinstance(db_path, sqlite3.Connection):
+        connection, db_path = db_path, None
+    create_tables(db_path, connection=connection)
 
 
-if __name__ == "__main__":
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='УП.11 №4 — пересоздание SQLite базы.')
+    parser.add_argument('--db', type=Path, default=DB_PATH, help='Путь к файлу базы')
+    parser.add_argument('--keep-data', action='store_true', help='Не удалять существующие данные')
+    args = parser.parse_args(argv)
+    if not args.keep_data:
+        drop_all_tables(args.db)
+    create_tables(args.db)
+    with get_connection(args.db) as conn:
+        present = [r['name'] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        if set(present) != set(TABLES):
+            raise RuntimeError(f'Неправильный набор таблиц: {present}')
+        if conn.execute('PRAGMA foreign_key_check').fetchall():
+            raise RuntimeError('Обнаружены повреждённые внешние ключи')
+    print(f'База создана: {args.db} | {len(present)} таблиц | внешние ключи включены')
+
+
+if __name__ == '__main__':
     main()

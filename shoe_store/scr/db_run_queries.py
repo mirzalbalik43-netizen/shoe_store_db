@@ -1,88 +1,51 @@
-import sqlite3
-import os
+
+import argparse
+from pathlib import Path
+from db_init import DB_PATH, PROJECT_DIR, get_connection
+
+SQL_PATH=PROJECT_DIR/'queries'/'04_check_queries.sql'
 
 
-def get_connection():
-    db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db")
-    db_path = os.path.join(db_dir, "shoe_store.sqlite")
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def run_queries(db_path=DB_PATH, write_report=True):
+    content=SQL_PATH.read_text(encoding='utf-8')
+    statements=[]
+    descriptions=[]
+    accumulator=[]
+    for line in content.splitlines():
+        if line.lstrip().startswith('--'):
+            if line.startswith('-- ') and line[3:4].isdigit():
+                descriptions.append(line.lstrip('- ').strip())
+            continue
+        accumulator.append(line)
+        if ';' in line:
+            query='\n'.join(accumulator).strip().rstrip(';').strip()
+            if query:
+                statements.append(query)
+            accumulator=[]
+    result=[]
+    with get_connection(db_path) as conn:
+        for i,sql in enumerate(statements):
+            cursor=conn.execute(sql)
+            names=[d[0] for d in cursor.description]
+            records=cursor.fetchall()
+            result.append((descriptions[i] if i<len(descriptions) else f'Запрос {i+1}',sql,names,records))
+    if write_report:
+        md=['# УП.11 №4 — Фактические результаты SQL-запросов','',
+            f'Запросы выполнены на базе `{Path(db_path).name}`, SQL-файл `queries/04_check_queries.sql`.','']
+        for name,sql,columns,records in result:
+            md.extend([f'## {name}','',f'Возвращено строк: **{len(records)}**.','',
+                       '| '+' | '.join(columns)+' |','| '+' | '.join('---' for _ in columns)+' |'])
+            for r in records[:8]:
+                md.append('| '+' | '.join(str(value).replace('|','\\|').replace('\n',' ') if value is not None else 'NULL' for value in r)+' |')
+            if not records: md.append('| '+' | '.join('—' for _ in columns)+' |')
+            if len(records)>8: md.append(f'\n*Показаны первые 8 из {len(records)} строк.*')
+            md.append('')
+        (PROJECT_DIR/'docs'/'04_query_results.md').write_text('\n'.join(md),encoding='utf-8')
+    return result
 
-
-def run_query(conn, title, sql):
-    print("=" * 70)
-    print(title)
-    print("=" * 70)
-    cursor = conn.cursor()
-    cursor.execute(sql)
-    rows = cursor.fetchall()
-    columns = [description[0] for description in cursor.description]
-
-    max_width = 25
-
-    widths = []
-    for i, col in enumerate(columns):
-        max_w = len(str(col))
-        for row in rows:
-            value_len = len(str(row[i]) if row[i] is not None else "None")
-            if value_len > max_w:
-                max_w = value_len
-        if max_w > max_width:
-            max_w = max_width
-        widths.append(max_w)
-
-    header = " | ".join(str(col)[:widths[i]].ljust(widths[i]) for i, col in enumerate(columns))
-    print(header)
-
-    for row in rows:
-        line = " | ".join(
-            (str(row[i]) if row[i] is not None else "None")[:widths[i]].ljust(widths[i])
-            for i in range(len(columns))
-        )
-        print(line)
-
-    print(f"Всего записей: {len(rows)}")
-    print()
-
-
-def main():
-    conn = get_connection()
-
-    run_query(conn, "ЗАПРОС 1. СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ С РОЛЯМИ", """
-        SELECT u.user_id, u.last_name, u.first_name, u.middle_name, u.login, r.role_name
-        FROM users u
-        JOIN roles r ON u.role_id = r.role_id
-    """)
-
-    run_query(conn, "ЗАПРОС 2. СПИСОК ВСЕХ ТОВАРОВ", """
-        SELECT product_id, product_name, category, manufacturer, price, image_path
-        FROM products
-    """)
-
-    run_query(conn, "ЗАПРОС 3. СПИСОК ВСЕХ РАЗМЕРОВ", """
-        SELECT size_id, size_value
-        FROM sizes
-        ORDER BY size_value
-    """)
-
-    run_query(conn, "ЗАПРОС 4. СПИСОК ВСЕХ ЗАКАЗОВ С ФИО КЛИЕНТОВ", """
-        SELECT o.order_id, u.last_name, u.first_name, u.middle_name, o.order_date
-        FROM orders o
-        JOIN users u ON o.user_id = u.user_id
-        ORDER BY o.order_date
-    """)
-
-    run_query(conn, "ЗАПРОС 5. СПИСОК ВСЕХ ТОВАРНЫХ ПОЗИЦИЙ С НАИМЕНОВАНИЕМ ТОВАРА И РАЗМЕРОМ", """
-        SELECT si.stock_item_id, p.product_name, s.size_value, si.quantity
-        FROM stock_items si
-        JOIN products p ON si.product_id = p.product_id
-        JOIN sizes s ON si.size_id = s.size_id
-        ORDER BY p.product_name, s.size_value
-    """)
-
-    conn.close()
-
-
-if __name__ == "__main__":
-    main()
+if __name__=='__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--db',type=Path,default=DB_PATH)
+    args=parser.parse_args()
+    for name,sql,cols,rows in run_queries(args.db):
+        print(f'{name}: {len(rows)} строк')

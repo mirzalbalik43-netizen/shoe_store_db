@@ -1,154 +1,106 @@
-import sqlite3
-import os
+
+import argparse
+from pathlib import Path
+from db_init import DB_PATH, get_connection, init_db
+
+ROLES = [(1, 'Администратор'), (2, 'Менеджер'), (3, 'Авторизованный пользователь')]
+USERS = [
+    (1, 'Иванов', 'Пётр', 'Сергеевич', 'admin', 1),
+    (2, 'Смирнова', 'Анна', 'Олеговна', 'manager', 2),
+    (3, 'Кузнецов', 'Алексей', 'Викторович', 'user', 3),
+]
+SIZES = [(1, 36.0), (2, 37.0), (3, 38.0), (4, 39.0), (5, 40.0)]
+PRODUCTS = [
+    (1, 'Мужская обувь', 'Кроссовки', 'NordStep', 'Runner Pro', 'images/runner_pro.jpg',
+     'Текстиль, резина', 'Для повседневной носки', 3499.90),
+    (2, 'Женская обувь', 'Кеды', 'UrbanWay', 'City Light', 'images/city_light.jpg',
+     'Хлопок, резина', 'Лёгкие городские кеды', 2890.00),
+    (3, 'Мужская обувь', 'Ботинки', 'TerraWalk', 'Winter Trail', 'images/winter_trail.jpg',
+     'Кожа, мех', 'Утеплённые ботинки', 7490.50),
+    (4, 'Женская обувь', 'Туфли', 'Elegance', 'Classic Line', 'images/classic_line.jpg',
+     'Экокожа', 'Классические туфли', 4299.00),
+    (5, 'Детская обувь', 'Кроссовки', 'MiniMove', 'Jump Kids', 'images/jump_kids.jpg',
+     'Текстиль, ЭВА', 'Для активных прогулок', 2190.00),
+]
+STOCK_ITEMS = [
+    (1,1,1,9),(2,1,2,12),(3,1,3,5),(4,2,3,7),(5,2,4,0),
+    (6,3,4,3),(7,3,5,6),(8,4,1,8),(9,4,5,4),(10,5,2,11),
+]
+ORDERS = [(1, '2026-10-10', 1), (2, '2026-10-11', 2), (3, '2026-10-12', 3)]
+ORDER_ITEMS = [
+    (1,1,1,1,3299.90),(2,1,8,1,4299.00),
+    (3,2,4,2,2890.00),(4,2,6,1,7490.50),
+    (5,3,7,1,7490.50),(6,3,10,2,2190.00),
+]
+SEED = [
+    ('roles', ('role_id', 'role_name'), ROLES),
+    ('sizes', ('size_id', 'size_value'), SIZES),
+    ('users', ('user_id', 'last_name', 'first_name', 'middle_name', 'login', 'role_id'), USERS),
+    ('products', ('product_id', 'category', 'subcategory', 'manufacturer', 'product_name',
+                  'image_path', 'composition', 'description', 'price'), PRODUCTS),
+    ('stock_items', ('stock_item_id', 'product_id', 'size_id', 'quantity_available'), STOCK_ITEMS),
+    ('orders', ('order_id', 'order_date', 'user_id'), ORDERS),
+    ('order_items', ('order_item_id','order_id','stock_item_id','quantity','price'), ORDER_ITEMS),
+]
 
 
-def get_connection():
-    db_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db")
-    db_path = os.path.join(db_dir, "shoe_store.sqlite")
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def seed_roles(conn):
+    return _seed_one(conn, SEED[0])
 
 
-def seed_db():
-    conn = get_connection()
-    cursor = conn.cursor()
+def seed_sizes(conn):
+    return _seed_one(conn, SEED[1])
 
-    cursor.execute("DELETE FROM order_items")
-    cursor.execute("DELETE FROM orders")
-    cursor.execute("DELETE FROM stock_items")
-    cursor.execute("DELETE FROM users")
-    cursor.execute("DELETE FROM products")
-    cursor.execute("DELETE FROM sizes")
-    cursor.execute("DELETE FROM roles")
 
-    cursor.execute("INSERT INTO roles (role_name) VALUES ('администратор')")
-    admin_role_id = cursor.lastrowid
-    cursor.execute("INSERT INTO roles (role_name) VALUES ('менеджер')")
-    manager_role_id = cursor.lastrowid
-    cursor.execute("INSERT INTO roles (role_name) VALUES ('авторизованный пользователь')")
-    user_role_id = cursor.lastrowid
+def seed_users(conn):
+    return _seed_one(conn, SEED[2])
 
-    cursor.execute(
-        "INSERT INTO users (last_name, first_name, middle_name, login, role_id) VALUES (?, ?, ?, ?, ?)",
-        ('Иванов', 'Иван', 'Иванович', 'admin', admin_role_id)
-    )
-    admin_user_id = cursor.lastrowid
 
-    cursor.execute(
-        "INSERT INTO users (last_name, first_name, middle_name, login, role_id) VALUES (?, ?, ?, ?, ?)",
-        ('Петров', 'Петр', 'Петрович', 'manager', manager_role_id)
-    )
-    manager_user_id = cursor.lastrowid
+def seed_products(conn):
+    return _seed_one(conn, SEED[3])
 
-    cursor.execute(
-        "INSERT INTO users (last_name, first_name, middle_name, login, role_id) VALUES (?, ?, ?, ?, ?)",
-        ('Сидоров', 'Сидор', None, 'user', user_role_id)
-    )
-    user_user_id = cursor.lastrowid
 
-    cursor.execute(
-        "INSERT INTO products (product_name, category, manufacturer, price, image_path) VALUES (?, ?, ?, ?, ?)",
-        ('Кроссовки Nike Air', 'Спортивная', 'Nike', 8990.00, 'images/nike_air.jpg')
-    )
-    p1 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO products (product_name, category, manufacturer, price, image_path) VALUES (?, ?, ?, ?, ?)",
-        ('Туфли классические', 'Классическая', 'Ecco', 12490.00, 'images/ecco_classic.jpg')
-    )
-    p2 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO products (product_name, category, manufacturer, price, image_path) VALUES (?, ?, ?, ?, ?)",
-        ('Ботинки зимние', 'Зимняя', 'Timberland', 15990.00, 'images/timberland_winter.jpg')
-    )
-    p3 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO products (product_name, category, manufacturer, price, image_path) VALUES (?, ?, ?, ?, ?)",
-        ('Сандалии летние', 'Летняя', 'Adidas', 4590.00, 'images/adidas_summer.jpg')
-    )
-    p4 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO products (product_name, category, manufacturer, price, image_path) VALUES (?, ?, ?, ?, ?)",
-        ('Кеды повседневные', 'Повседневная', 'Converse', 6790.00, 'images/converse_casual.jpg')
-    )
-    p5 = cursor.lastrowid
+def seed_stock_items(conn):
+    return _seed_one(conn, SEED[4])
 
-    cursor.execute("INSERT INTO sizes (size_value) VALUES (36.0)")
-    s1 = cursor.lastrowid
-    cursor.execute("INSERT INTO sizes (size_value) VALUES (37.0)")
-    s2 = cursor.lastrowid
-    cursor.execute("INSERT INTO sizes (size_value) VALUES (38.0)")
-    s3 = cursor.lastrowid
-    cursor.execute("INSERT INTO sizes (size_value) VALUES (39.0)")
-    s4 = cursor.lastrowid
-    cursor.execute("INSERT INTO sizes (size_value) VALUES (40.0)")
-    s5 = cursor.lastrowid
 
-    stock_data = [
-        (p1, s1, 10),
-        (p1, s2, 5),
-        (p1, s3, 0),
-        (p2, s2, 7),
-        (p2, s3, 3),
-        (p3, s4, 12),
-        (p3, s5, 8),
-        (p4, s1, 20),
-        (p4, s2, 15),
-        (p5, s3, 6),
-    ]
-    stock_ids = []
-    for product_id, size_id, quantity in stock_data:
-        cursor.execute(
-            "INSERT INTO stock_items (product_id, size_id, quantity) VALUES (?, ?, ?)",
-            (product_id, size_id, quantity)
-        )
-        stock_ids.append(cursor.lastrowid)
+def seed_orders(conn):
+    return _seed_one(conn, SEED[5])
 
-    cursor.execute(
-        "INSERT INTO orders (user_id, order_date) VALUES (?, ?)",
-        (user_user_id, '2025-01-15')
-    )
-    o1 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO orders (user_id, order_date) VALUES (?, ?)",
-        (user_user_id, '2025-02-20')
-    )
-    o2 = cursor.lastrowid
-    cursor.execute(
-        "INSERT INTO orders (user_id, order_date) VALUES (?, ?)",
-        (manager_user_id, '2025-03-10')
-    )
-    o3 = cursor.lastrowid
 
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o1, stock_ids[0], 1, 8990.00)
-    )
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o1, stock_ids[1], 2, 12490.00)
-    )
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o2, stock_ids[4], 1, 15990.00)
-    )
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o2, stock_ids[8], 3, 4590.00)
-    )
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o3, stock_ids[9], 1, 6790.00)
-    )
-    cursor.execute(
-        "INSERT INTO order_items (order_id, stock_item_id, quantity, price) VALUES (?, ?, ?, ?)",
-        (o3, stock_ids[3], 2, 12490.00)
-    )
+def seed_order_items(conn):
+    return _seed_one(conn, SEED[6])
 
+
+def _seed_one(conn, spec):
+    table, columns, data = spec
+    placeholders = ', '.join('?' for _ in columns)
+    statement = f'INSERT INTO {table} ({", ".join(columns)}) VALUES ({placeholders}) ON CONFLICT({columns[0]}) DO NOTHING'
+    conn.executemany(statement, data)
+    return len(data)
+
+
+def seed_database(conn):
+    for spec in SEED:
+        _seed_one(conn, spec)
     conn.commit()
-    conn.close()
-    print("Тестовые данные вставлены")
+    return {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+            for table, _, _ in SEED}
 
 
-if __name__ == "__main__":
-    seed_db()
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Заполнение тестовыми данными')
+    parser.add_argument('--db', type=Path, default=DB_PATH)
+    args = parser.parse_args(argv)
+    init_db(args.db)
+    with get_connection(args.db) as conn:
+        counts = seed_database(conn)
+        # Триггеры ставим после учебного наполнения, чтобы исторические заказы
+        # повторно не списали исходные остатки.
+        from db_apply_triggers import apply_triggers
+        apply_triggers(conn)
+    print('Заполнены таблицы:', ', '.join(f'{t}={count}' for t,count in counts.items()))
+
+
+if __name__ == '__main__':
+    main()

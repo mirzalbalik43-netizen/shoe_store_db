@@ -27,8 +27,7 @@ BEGIN
 Вставка заказа
     INSERT INTO orders (user_id, order_date) 
     VALUES (p_user_id, NOW())
-    RETURNING order_id INTO STRICT p_user_id; -- Перезаписываем ID для примера, лучше завести отдельную переменную
-
+    RETURNING order_id INTO STRICT p_user_id; 
 Вставка позиций
     INSERT INTO order_items (order_id, stock_item_id, quantity, price)
     VALUES (p_user_id, p_stock_item_id, p_qty, v_price);
